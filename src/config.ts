@@ -22,6 +22,9 @@ const schema = z.object({
   USAGE_FORWARD_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(50),
   WEBHOOK_DISPATCH_INTERVAL_MS: z.coerce.number().int().min(1_000).default(5_000),
   WEBHOOK_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
+  SINGLE_TENANT: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  SINGLE_TENANT_ORG_NAME: z.string().trim().min(1).max(100).default("OpenMantle"),
+  SINGLE_TENANT_ADMIN_EMAIL: z.string().email().default("admin@openmantle.local"),
   SUBSCRIPTION_POLL_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
   HISTORICAL_SYNC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(900_000),
 });

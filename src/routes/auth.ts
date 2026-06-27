@@ -22,6 +22,7 @@ function slugify(value: string): string {
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post("/v1/auth/signup", async (request, reply) => {
+    if (app.config.SINGLE_TENANT) return reply.code(404).send({ error: "Signup is disabled in single-tenant mode" });
     const body = signupSchema.parse(request.body);
     const passwordHash = await hashPassword(body.password);
     const organizationId = randomUUID();
@@ -57,6 +58,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/v1/auth/login", async (request, reply) => {
+    if (app.config.SINGLE_TENANT) return reply.code(404).send({ error: "Login is disabled in single-tenant mode" });
     const body = loginSchema.parse(request.body);
     const result = await app.pg.query<{
       user_id: string;
@@ -68,6 +70,21 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (!user || !(await verifyPassword(user.password_hash, body.password))) {
       return reply.code(401).send({ error: "Invalid email or password" });
     }
+    const token = await signSession(
+      { userId: user.user_id, organizationId: user.organization_id, role: user.role },
+      app.config.JWT_SECRET,
+      app.config.JWT_ISSUER,
+    );
+    return { token, organizationId: user.organization_id, userId: user.user_id };
+  });
+
+  app.post("/v1/auth/single-tenant-session", async (_request, reply) => {
+    if (!app.config.SINGLE_TENANT) return reply.code(404).send({ error: "Single-tenant mode is disabled" });
+    const result = await app.pg.query<{ user_id: string; organization_id: string; role: string }>(
+      "SELECT * FROM find_single_tenant()",
+    );
+    const user = result.rows[0];
+    if (!user) return reply.code(503).send({ error: "Single-tenant organization is not initialized" });
     const token = await signSession(
       { userId: user.user_id, organizationId: user.organization_id, role: user.role },
       app.config.JWT_SECRET,

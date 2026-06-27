@@ -14,12 +14,24 @@ import { partnerCredentialRoutes } from "./routes/partner-credentials.js";
 import { commerceRoutes } from "./routes/commerce.js";
 import { usageRoutes } from "./routes/usage.js";
 import { webhookRoutes } from "./routes/webhooks.js";
+import { hashPassword } from "./auth/crypto.js";
+import { randomBytes } from "node:crypto";
+import { dashboardRoutes } from "./routes/dashboard.js";
 
 export async function buildServer(config: Config = loadConfig()) {
   const app = Fastify({ logger: config.NODE_ENV !== "test" });
   const pg = createPool(config.DATABASE_URL);
   const redis = new Redis(config.REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 1 });
   const queues = createQueues(config);
+
+  if (config.SINGLE_TENANT) {
+    const passwordHash = await hashPassword(randomBytes(32).toString("base64url"));
+    await pg.query("SELECT * FROM bootstrap_single_tenant($1, $2, $3)", [
+      config.SINGLE_TENANT_ORG_NAME,
+      config.SINGLE_TENANT_ADMIN_EMAIL,
+      passwordHash,
+    ]);
+  }
 
   registerAppDecorators(app, config, pg, redis, queues);
   await app.register(cors, { origin: config.CORS_ORIGIN, credentials: true });
@@ -39,6 +51,14 @@ export async function buildServer(config: Config = loadConfig()) {
     const spec = await readFile(resolve(process.cwd(), "docs/openapi.yaml"), "utf8");
     return reply.type("application/yaml; charset=utf-8").send(spec);
   });
+  app.get("/dashboard", async (_request, reply) => {
+    const html = await readFile(resolve(process.cwd(), "dashboard/index.html"), "utf8");
+    return reply.type("text/html; charset=utf-8").send(html);
+  });
+  app.get("/dashboard.js", async (_request, reply) => {
+    const javascript = await readFile(resolve(process.cwd(), "dashboard/dashboard.js"), "utf8");
+    return reply.type("text/javascript; charset=utf-8").send(javascript);
+  });
   app.get("/health/ready", async (_request, reply) => {
     try {
       await pg.query("SELECT 1");
@@ -57,6 +77,7 @@ export async function buildServer(config: Config = loadConfig()) {
   await app.register(commerceRoutes);
   await app.register(usageRoutes);
   await app.register(webhookRoutes);
+  await app.register(dashboardRoutes);
   app.addHook("onClose", async () => {
     await Promise.all([
       pg.end(),

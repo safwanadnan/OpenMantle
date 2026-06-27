@@ -46,3 +46,9 @@ Queue jobs are grouped by shop and meter after a short delay. A Redis lease prev
 The snapshot writer compares the normalized subscription payload with the previous observation. On a change, it inserts one `webhook_deliveries` outbox row per active app endpoint inside the snapshot transaction. An organization-scoped recurring BullMQ job claims due deliveries with `FOR UPDATE SKIP LOCKED`, places a short processing lease in `next_attempt_at`, and sends them outside the database transaction.
 
 Secrets are generated once, encrypted at rest, and returned only when the endpoint is created. Requests are signed as `HMAC-SHA256(secret, timestamp + "." + exactBody)`. Non-2xx responses and transport failures use exponential backoff for up to eight attempts. Redirects are disabled, and production endpoint URLs must use HTTPS.
+
+## Dashboard and deployment modes
+
+The dashboard is served directly by Fastify at `/dashboard`. Its browser controller uses the same versioned REST routes as other clients. All visible UI is composed from Shopify's globally registered Polaris `s-*` web components; no application CSS or parallel component system is shipped.
+
+In multi-tenant mode the dashboard uses signup and login sessions. With `SINGLE_TENANT=true`, a narrow `SECURITY DEFINER` bootstrap function creates or reuses exactly one organization and owner. A dedicated session endpoint then bypasses interactive login. Startup refuses the mode when more than one organization exists, preventing an ambiguous tenant selection.

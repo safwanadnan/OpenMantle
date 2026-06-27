@@ -110,6 +110,14 @@ Create an outbound endpoint with `POST /v1/webhook-endpoints` using a dashboard 
 
 Webhook requests include `X-OpenMantle-Event`, `X-OpenMantle-Delivery`, `X-OpenMantle-Timestamp`, and `X-OpenMantle-Signature`. Verify the signature by computing HMAC-SHA256 over `<timestamp>.<exact request body>` and comparing it with the hex value after `sha256=`.
 
+## Dashboard
+
+Open `http://localhost:3000/dashboard` after the stack is healthy. The dashboard is built entirely from Shopify Polaris web components loaded from Shopify's CDN; it has no CSS framework, React component library, or custom visual elements.
+
+It covers Partner credential setup, apps and shops, App Events credentials, meters, per-shop subscription state, usage analytics, historical events, API keys, outbound webhooks, delivery history, and dead-letter resolution.
+
+For a trusted self-hosted installation, set `SINGLE_TENANT=true`. OpenMantle creates or reuses the sole organization and the dashboard obtains its owner session automatically. Do not expose single-tenant mode on an untrusted public network because it intentionally skips interactive login.
+
 ## Development
 
 ```bash
@@ -135,4 +143,4 @@ See [docs/architecture.md](docs/architecture.md) for the domain model and tenant
 
 ## Current scope
 
-Phases 1–4 are implemented. Phase 5—the organization dashboard and single-tenant self-hosting mode—is next. The SDK package is prepared at version `0.1.0` but is not published automatically. Partner operations are pinned to `2026-07`; App Events defaults to Shopify's currently published `unstable` endpoint and is independently configurable with `APP_EVENTS_API_VERSION`.
+Phases 1–5 are implemented. Phase 6—backups, observability, limiter load testing, and production hardening—is next. The SDK package is prepared at version `0.1.0` but is not published automatically. Partner operations are pinned to `2026-07`; App Events defaults to Shopify's currently published `unstable` endpoint and is independently configurable with `APP_EVENTS_API_VERSION`.

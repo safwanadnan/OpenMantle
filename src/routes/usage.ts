@@ -6,6 +6,7 @@ import { encryptCredential } from "../crypto/credentials.js";
 import { scheduleUsageForward } from "../queues.js";
 
 const appParams = z.object({ appId: z.string().uuid() });
+const jobParams = z.object({ id: z.string().uuid() });
 const meterHandle = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_.-]+$/);
 const createMeterSchema = z.object({ key: meterHandle });
 const credentialsSchema = z.object({
@@ -133,6 +134,15 @@ export async function usageRoutes(app: FastifyInstance): Promise<void> {
               created_at AS "createdAt"
        FROM dead_letter_jobs WHERE resolved = false ORDER BY created_at DESC LIMIT 100`);
     return { data: result.rows };
+  });
+
+  app.post("/v1/dead-letter-jobs/:id/resolve", { preHandler: app.requireSession }, async (request, reply) => {
+    const { id } = jobParams.parse(request.params);
+    const result = await tenantQuery(app, request.auth!.organizationId,
+      `UPDATE dead_letter_jobs SET resolved = true, updated_at = now()
+       WHERE id = $1 AND resolved = false RETURNING id`, [id]);
+    if (!result.rows[0]) return reply.code(404).send({ error: "Dead-letter job not found" });
+    return { id, resolved: true };
   });
 }
 

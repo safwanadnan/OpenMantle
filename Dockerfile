@@ -9,6 +9,7 @@ COPY test ./test
 COPY drizzle ./drizzle
 COPY docs ./docs
 COPY packages ./packages
+COPY dashboard ./dashboard
 RUN npm run build
 
 FROM node:24-alpine AS runtime
@@ -20,5 +21,6 @@ RUN npm install --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/drizzle ./drizzle
 COPY --from=build /app/docs ./docs
+COPY --from=build /app/dashboard ./dashboard
 USER node
 CMD ["node", "dist/src/api.js"]
