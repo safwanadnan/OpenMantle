@@ -1,0 +1,185 @@
+openapi: 3.1.0
+info:
+  title: OpenMantle API
+  version: 0.1.0
+  description: Billing infrastructure API for Shopify App Pricing.
+servers:
+  - url: http://localhost:3000
+security:
+  - bearerAuth: []
+paths:
+  /v1/usage:
+    post:
+      operationId: trackUsage
+      summary: Persist and enqueue a usage event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TrackUsageInput' }
+      responses:
+        '202':
+          description: Event persisted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrackUsageResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Shop or meter not found }
+  /v1/apps:
+    get:
+      operationId: listApps
+      responses:
+        '200':
+          description: Apps
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/App' } }
+  /v1/apps/{appId}/shops:
+    get:
+      operationId: listShops
+      parameters:
+        - $ref: '#/components/parameters/AppId'
+      responses:
+        '200':
+          description: Shops
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Shop' } }
+  /v1/apps/{appId}/meters:
+    get:
+      operationId: listMeters
+      parameters:
+        - $ref: '#/components/parameters/AppId'
+      responses:
+        '200':
+          description: Meters
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Meter' } }
+  /v1/shops/{shopId}/subscription:
+    get:
+      operationId: getSubscription
+      parameters:
+        - name: shopId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Latest subscription snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubscriptionSnapshot' }
+        '404': { description: Snapshot not found }
+  /v1/historical-events:
+    get:
+      operationId: listHistoricalEvents
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 250, default: 100 }
+        - name: before
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Historical events in reverse chronological order
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/HistoricalEvent' } }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: OpenMantle API key for public routes, or dashboard JWT where supported.
+  parameters:
+    AppId:
+      name: appId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Unauthorized:
+      description: Invalid or missing API key
+  schemas:
+    TrackUsageInput:
+      type: object
+      additionalProperties: false
+      required: [shop_id, meter_key, quantity, idempotency_key]
+      properties:
+        shop_id: { type: string, format: uuid }
+        meter_key: { type: string, minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9_.-]+$' }
+        quantity: { type: integer, not: { const: 0 } }
+        idempotency_key: { type: string, minLength: 1, maxLength: 64 }
+    TrackUsageResponse:
+      type: object
+      required: [id, status, duplicate]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [pending, reported, failed] }
+        duplicate: { type: boolean }
+    App:
+      type: object
+      required: [id, shopifyAppId, name, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        partnerCredentialId: { type: [string, 'null'], format: uuid }
+        shopifyAppId: { type: string }
+        name: { type: string }
+        createdAt: { type: string, format: date-time }
+    Shop:
+      type: object
+      required: [id, appId, shopifyShopId, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        appId: { type: string, format: uuid }
+        shopifyShopId: { type: string }
+        domain: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+    Meter:
+      type: object
+      required: [id, appId, key, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        appId: { type: string, format: uuid }
+        key: { type: string }
+        createdAt: { type: string, format: date-time }
+    SubscriptionSnapshot:
+      type: object
+      required: [id, shopId, status, payload, observedAt]
+      properties:
+        id: { type: string, format: uuid }
+        shopId: { type: string, format: uuid }
+        status: { type: string }
+        planHandle: { type: [string, 'null'] }
+        payload: { type: object, additionalProperties: true }
+        observedAt: { type: string, format: date-time }
+    HistoricalEvent:
+      type: object
+      required: [id, shopifyEventId, eventType, occurredAt, payload]
+      properties:
+        id: { type: string, format: uuid }
+        shopifyEventId: { type: string }
+        eventType: { type: string }
+        occurredAt: { type: string, format: date-time }
+        shopifyShopId: { type: [string, 'null'] }
+        subjectType: { type: [string, 'null'] }
+        subjectId: { type: [string, 'null'] }
+        payload: { type: object, additionalProperties: true }

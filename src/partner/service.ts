@@ -6,6 +6,7 @@ import { PartnerClient } from "./client.js";
 import { ACTIVE_SUBSCRIPTION_QUERY, HISTORICAL_EVENTS_QUERY } from "./queries.js";
 import { PartnerRateLimiter } from "./rate-limiter.js";
 import type { ActiveSubscription, HistoricalEventsPage } from "./types.js";
+import { scheduleWebhookDispatch, type OpenMantleQueues } from "../queues.js";
 
 interface CredentialRow {
   partner_organization_id: string;
@@ -38,6 +39,7 @@ export async function pollActiveSubscription(
   redis: Redis,
   config: Config,
   input: { organizationId: string; credentialId: string; appId: string; shopId: string },
+  queues?: Pick<OpenMantleQueues, "webhookDelivery">,
 ): Promise<ActiveSubscription | null> {
   const row = await loadPollRow(pool, input);
   const partner = partnerClientForToken(
@@ -51,7 +53,8 @@ export async function pollActiveSubscription(
     appId: row.shopify_app_id,
     shopId: row.shopify_shop_id,
   });
-  await writeSnapshot(pool, input.organizationId, input.shopId, data.activeSubscription);
+  const deliveries = await writeSnapshot(pool, input.organizationId, input.shopId, data.activeSubscription);
+  if (deliveries > 0 && queues) await scheduleWebhookDispatch(queues, config, input.organizationId);
   return data.activeSubscription;
 }
 
@@ -169,24 +172,67 @@ async function writeSnapshot(
   organizationId: string,
   shopId: string,
   subscription: ActiveSubscription | null,
-): Promise<void> {
+): Promise<number> {
   const client = await tenantClient(pool, organizationId);
   try {
     const planHandle = subscription?.items.find((item) => item.price.__typename === "FlatRatePrice" && item.price.active)?.handle
       ?? subscription?.items.find((item) => item.handle)?.handle
       ?? null;
-    await client.query(
-      `INSERT INTO subscription_snapshots (organization_id, shop_id, status, plan_handle, payload)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [organizationId, shopId, subscription ? "active" : "none", planHandle, subscription ?? {}],
+    const previous = await client.query<{ status: string; plan_handle: string | null; payload: unknown }>(
+      `SELECT status, plan_handle, payload FROM subscription_snapshots
+       WHERE shop_id = $1 ORDER BY observed_at DESC LIMIT 1`, [shopId],
     );
+    const status = subscription ? "active" : "none";
+    const snapshot = await client.query<{ id: string; observed_at: Date }>(
+      `INSERT INTO subscription_snapshots (organization_id, shop_id, status, plan_handle, payload)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id, observed_at`,
+      [organizationId, shopId, status, planHandle, subscription ?? {}],
+    );
+    const prior = previous.rows[0];
+    const changed = !prior
+      || prior.status !== status
+      || prior.plan_handle !== planHandle
+      || stableStringify(prior.payload) !== stableStringify(subscription ?? {});
+    let deliveries = 0;
+    if (changed) {
+      const current = snapshot.rows[0]!;
+      const inserted = await client.query(
+        `INSERT INTO webhook_deliveries (organization_id, endpoint_id, shop_id, event_type, payload)
+         SELECT $1, we.id, $2, 'subscription.changed', $3
+         FROM webhook_endpoints we
+         JOIN shops s ON s.app_id = we.app_id AND s.organization_id = we.organization_id
+         WHERE we.organization_id = $1 AND s.id = $2 AND we.active = true`,
+        [organizationId, shopId, {
+          id: current.id,
+          event: "subscription.changed",
+          organizationId,
+          shopId,
+          observedAt: current.observed_at.toISOString(),
+          previous: prior ? { status: prior.status, planHandle: prior.plan_handle } : null,
+          current: { status, planHandle, subscription },
+        }],
+      );
+      deliveries = inserted.rowCount ?? 0;
+    }
     await client.query("COMMIT");
+    return deliveries;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();
   }
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 async function tenantClient(pool: Pool, organizationId: string): Promise<PoolClient> {

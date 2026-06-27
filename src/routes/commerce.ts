@@ -20,9 +20,13 @@ const createShopSchema = z.object({
   shopifyShopId: z.string().regex(/^gid:\/\/shopify\/Shop\/\d+$/),
   domain: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/),
 });
+const historicalQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(250).default(100),
+  before: z.string().datetime().optional(),
+});
 
 export async function commerceRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/v1/apps", { preHandler: app.requireSession }, async (request) => {
+  app.get("/v1/apps", { preHandler: app.requireApiAccess }, async (request) => {
     const result = await tenantQuery(app, request.auth!.organizationId,
       `SELECT id, partner_credential_id AS "partnerCredentialId", shopify_app_id AS "shopifyAppId", name, created_at AS "createdAt"
        FROM apps ORDER BY created_at DESC`);
@@ -39,7 +43,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send(result.rows[0]);
   });
 
-  app.get("/v1/apps/:appId/shops", { preHandler: app.requireSession }, async (request) => {
+  app.get("/v1/apps/:appId/shops", { preHandler: app.requireApiAccess }, async (request) => {
     const { appId } = appShopParams.parse(request.params);
     const result = await tenantQuery(app, request.auth!.organizationId,
       `SELECT id, app_id AS "appId", shopify_shop_id AS "shopifyShopId", domain, created_at AS "createdAt"
@@ -77,7 +81,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send(shop);
   });
 
-  app.get("/v1/shops/:id/subscription", { preHandler: app.requireSession }, async (request, reply) => {
+  app.get("/v1/shops/:id/subscription", { preHandler: app.requireApiAccess }, async (request, reply) => {
     const { id } = uuidParams.parse(request.params);
     const result = await tenantQuery(app, request.auth!.organizationId,
       `SELECT id, shop_id AS "shopId", status, plan_handle AS "planHandle", payload,
@@ -87,12 +91,14 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     return result.rows[0];
   });
 
-  app.get("/v1/historical-events", { preHandler: app.requireSession }, async (request) => {
+  app.get("/v1/historical-events", { preHandler: app.requireApiAccess }, async (request) => {
+    const query = historicalQuery.parse(request.query);
     const result = await tenantQuery(app, request.auth!.organizationId,
       `SELECT id, shopify_event_id AS "shopifyEventId", event_type AS "eventType",
               occurred_at AS "occurredAt", shopify_shop_id AS "shopifyShopId",
               subject_type AS "subjectType", subject_id AS "subjectId", payload
-       FROM historical_events ORDER BY occurred_at DESC LIMIT 100`);
+       FROM historical_events WHERE ($1::timestamptz IS NULL OR occurred_at < $1)
+       ORDER BY occurred_at DESC LIMIT $2`, [query.before ?? null, query.limit]);
     return { data: result.rows };
   });
 
@@ -112,7 +118,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       credentialId: row.partner_credential_id,
       appId: row.app_id,
       shopId: row.shop_id,
-    });
+    }, app.queues);
     const confirmed = subscription?.items.some((item) => item.handle === query.plan_handle) ?? false;
     if (!confirmed) {
       return reply.code(409).send({ error: "Shopify has not confirmed the selected plan", planHandle: query.plan_handle });

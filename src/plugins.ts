@@ -15,6 +15,7 @@ declare module "fastify" {
     queues: OpenMantleQueues;
     requireSession(request: FastifyRequest): Promise<void>;
     requireApiKey(request: FastifyRequest): Promise<void>;
+    requireApiAccess(request: FastifyRequest): Promise<void>;
   }
 }
 
@@ -62,6 +63,14 @@ export function registerAppDecorators(
       throw unauthorized();
     }
     request.auth = { userId: `api-key:${row.key_id}`, organizationId: row.organization_id, role: "api" };
+  });
+
+  app.decorate("requireApiAccess", async function requireApiAccess(request: FastifyRequest) {
+    const token = request.headers.authorization?.startsWith("Bearer ")
+      ? request.headers.authorization.slice(7)
+      : "";
+    if (token.startsWith("om_")) return app.requireApiKey(request);
+    return app.requireSession(request);
   });
 }
 

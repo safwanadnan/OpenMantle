@@ -4,6 +4,8 @@ import type { Config } from "./config.js";
 
 export const PARTNER_POLL_QUEUE = "partner-api-poll";
 export const HISTORICAL_SYNC_QUEUE = "historical-events-sync";
+export const USAGE_FORWARD_QUEUE = "usage-forward";
+export const WEBHOOK_DELIVERY_QUEUE = "webhook-delivery";
 
 export interface SubscriptionPollJob {
   organizationId: string;
@@ -15,6 +17,16 @@ export interface SubscriptionPollJob {
 export interface HistoricalSyncJob {
   organizationId: string;
   credentialId: string;
+}
+
+export interface UsageForwardJob {
+  organizationId: string;
+  shopId: string;
+  meterId: string;
+}
+
+export interface WebhookDeliveryJob {
+  organizationId: string;
 }
 
 export function redisConnection(urlValue: string) {
@@ -33,7 +45,38 @@ export function createQueues(config: Config) {
   return {
     partnerPoll: new Queue<SubscriptionPollJob>(PARTNER_POLL_QUEUE, { connection }),
     historicalSync: new Queue<HistoricalSyncJob>(HISTORICAL_SYNC_QUEUE, { connection }),
+    usageForward: new Queue<UsageForwardJob>(USAGE_FORWARD_QUEUE, { connection }),
+    webhookDelivery: new Queue<WebhookDeliveryJob>(WEBHOOK_DELIVERY_QUEUE, { connection }),
   };
+}
+
+export async function scheduleWebhookDispatch(
+  queues: Pick<OpenMantleQueues, "webhookDelivery">,
+  config: Config,
+  organizationId: string,
+): Promise<void> {
+  await queues.webhookDelivery.upsertJobScheduler(
+    `webhooks:${organizationId}`,
+    { every: config.WEBHOOK_DISPATCH_INTERVAL_MS, offset: stableOffset(organizationId, config.WEBHOOK_DISPATCH_INTERVAL_MS) },
+    { name: "dispatch", data: { organizationId }, opts: standardJobOptions() },
+  );
+  await queues.webhookDelivery.add("dispatch", { organizationId }, {
+    ...standardJobOptions(),
+    jobId: `webhooks-${organizationId}-${Date.now()}`,
+  });
+}
+
+export async function scheduleUsageForward(
+  queues: OpenMantleQueues,
+  config: Config,
+  data: UsageForwardJob,
+): Promise<void> {
+  const bucket = Math.floor(Date.now() / Math.max(config.USAGE_FORWARD_DELAY_MS, 1));
+  await queues.usageForward.add("forward", data, {
+    ...standardJobOptions(),
+    delay: config.USAGE_FORWARD_DELAY_MS,
+    jobId: `usage-${data.shopId}-${data.meterId}-${bucket}`,
+  });
 }
 
 export type OpenMantleQueues = ReturnType<typeof createQueues>;

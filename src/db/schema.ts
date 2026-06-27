@@ -19,6 +19,7 @@ const timestamps = {
 
 export const usageEventType = pgEnum("usage_event_type", ["usage", "correction"]);
 export const usageEventStatus = pgEnum("usage_event_status", ["pending", "reported", "failed"]);
+export const webhookDeliveryStatus = pgEnum("webhook_delivery_status", ["pending", "delivered", "failed"]);
 
 export const organizations = pgTable("organizations", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -60,6 +61,8 @@ export const apps = pgTable("apps", {
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   partnerCredentialId: uuid("partner_credential_id").references(() => partnerCredentials.id, { onDelete: "set null" }),
   shopifyAppId: text("shopify_app_id").notNull(),
+  appEventsClientId: text("app_events_client_id"),
+  encryptedAppEventsClientSecret: text("encrypted_app_events_client_secret"),
   name: text("name").notNull(),
   ...timestamps,
 }, (table) => [
@@ -102,6 +105,7 @@ export const usageEvents = pgTable("usage_events", {
   status: usageEventStatus("status").notNull().default("pending"),
   reportedAt: timestamp("reported_at", { withTimezone: true }),
   failureReason: text("failure_reason"),
+  forwardAttempts: integer("forward_attempts").notNull().default(0),
   ...timestamps,
 }, (table) => [
   uniqueIndex("usage_events_shop_idempotency_unique").on(table.shopId, table.idempotencyKey),
@@ -165,3 +169,28 @@ export const deadLetterJobs = pgTable("dead_letter_jobs", {
   resolved: boolean("resolved").notNull().default(false),
   ...timestamps,
 }, (table) => [index("dead_letter_jobs_org_resolved_idx").on(table.organizationId, table.resolved)]);
+
+export const webhookEndpoints = pgTable("webhook_endpoints", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  appId: uuid("app_id").notNull().references(() => apps.id, { onDelete: "cascade" }),
+  url: text("url").notNull(),
+  encryptedSecret: text("encrypted_secret").notNull(),
+  active: boolean("active").notNull().default(true),
+  ...timestamps,
+}, (table) => [index("webhook_endpoints_org_app_idx").on(table.organizationId, table.appId)]);
+
+export const webhookDeliveries = pgTable("webhook_deliveries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  endpointId: uuid("endpoint_id").notNull().references(() => webhookEndpoints.id, { onDelete: "cascade" }),
+  shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+  eventType: text("event_type").notNull(),
+  payload: jsonb("payload").notNull(),
+  status: webhookDeliveryStatus("status").notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+  lastError: text("last_error"),
+  ...timestamps,
+}, (table) => [index("webhook_deliveries_org_pending_idx").on(table.organizationId, table.status, table.nextAttemptAt)]);

@@ -1,5 +1,7 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { Redis } from "ioredis";
 import { ZodError } from "zod";
 import { loadConfig, type Config } from "./config.js";
@@ -10,6 +12,8 @@ import { apiKeyRoutes } from "./routes/api-keys.js";
 import { createQueues } from "./queues.js";
 import { partnerCredentialRoutes } from "./routes/partner-credentials.js";
 import { commerceRoutes } from "./routes/commerce.js";
+import { usageRoutes } from "./routes/usage.js";
+import { webhookRoutes } from "./routes/webhooks.js";
 
 export async function buildServer(config: Config = loadConfig()) {
   const app = Fastify({ logger: config.NODE_ENV !== "test" });
@@ -31,6 +35,10 @@ export async function buildServer(config: Config = loadConfig()) {
   });
 
   app.get("/health/live", async () => ({ status: "ok" }));
+  app.get("/openapi.yaml", async (_request, reply) => {
+    const spec = await readFile(resolve(process.cwd(), "docs/openapi.yaml"), "utf8");
+    return reply.type("application/yaml; charset=utf-8").send(spec);
+  });
   app.get("/health/ready", async (_request, reply) => {
     try {
       await pg.query("SELECT 1");
@@ -47,12 +55,16 @@ export async function buildServer(config: Config = loadConfig()) {
   await app.register(apiKeyRoutes);
   await app.register(partnerCredentialRoutes);
   await app.register(commerceRoutes);
+  await app.register(usageRoutes);
+  await app.register(webhookRoutes);
   app.addHook("onClose", async () => {
     await Promise.all([
       pg.end(),
       redis.quit().catch(() => undefined),
       queues.partnerPoll.close(),
       queues.historicalSync.close(),
+      queues.usageForward.close(),
+      queues.webhookDelivery.close(),
     ]);
   });
   return app;

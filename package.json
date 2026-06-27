@@ -2,6 +2,7 @@
   "name": "openmantle",
   "version": "0.1.0",
   "private": true,
+  "workspaces": ["packages/*"],
   "description": "Open-source billing infrastructure for Shopify App Pricing",
   "type": "module",
   "engines": {
@@ -9,10 +10,11 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:sdk": "npm run build --workspace @openmantle/sdk",
     "dev:api": "tsx watch src/api.ts",
     "dev:worker": "tsx watch src/worker.ts",
-    "start:api": "node dist/api.js",
-    "start:worker": "node dist/worker.js",
+    "start:api": "node dist/src/api.js",
+    "start:worker": "node dist/src/worker.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "test": "vitest run",

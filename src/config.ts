@@ -17,6 +17,11 @@ const schema = z.object({
   }, "CREDENTIAL_ENCRYPTION_KEY must be a base64-encoded 32-byte key"),
   PARTNER_API_VERSION: z.string().regex(/^\d{4}-\d{2}$/).default("2026-07"),
   PARTNER_API_REQUESTS_PER_SECOND: z.coerce.number().int().min(1).max(3).default(3),
+  APP_EVENTS_API_VERSION: z.string().regex(/^(unstable|\d{4}-\d{2})$/).default("unstable"),
+  USAGE_FORWARD_DELAY_MS: z.coerce.number().int().min(0).default(1_000),
+  USAGE_FORWARD_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(50),
+  WEBHOOK_DISPATCH_INTERVAL_MS: z.coerce.number().int().min(1_000).default(5_000),
+  WEBHOOK_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
   SUBSCRIPTION_POLL_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
   HISTORICAL_SYNC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(900_000),
 });
