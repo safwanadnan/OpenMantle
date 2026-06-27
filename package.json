@@ -1,0 +1,41 @@
+{
+  "name": "openmantle",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Open-source billing infrastructure for Shopify App Pricing",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev:api": "tsx watch src/api.ts",
+    "dev:worker": "tsx watch src/worker.ts",
+    "start:api": "node dist/api.js",
+    "start:worker": "node dist/worker.js",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "test": "vitest run",
+    "test:integration": "vitest run test/rls.integration.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.0.1",
+    "argon2": "^0.44.0",
+    "bullmq": "^5.58.5",
+    "drizzle-orm": "^0.44.5",
+    "fastify": "^5.6.1",
+    "ioredis": "^5.7.0",
+    "jose": "^6.1.0",
+    "pg": "^8.16.3",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "@types/pg": "^8.15.5",
+    "drizzle-kit": "^0.31.5",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

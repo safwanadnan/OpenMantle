@@ -1,0 +1,102 @@
+name: openmantle
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: openmantle
+      POSTGRES_USER: openmantle
+      POSTGRES_PASSWORD: openmantle
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-app-role.sql:/docker-entrypoint-initdb.d/01-app-role.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openmantle -d openmantle"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    command: ["node", "dist/src/db/migrate.js"]
+    environment:
+      DATABASE_URL: postgres://openmantle:openmantle@postgres:5432/openmantle
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    command: ["node", "dist/src/api.js"]
+    environment: &app-environment
+      DATABASE_URL: postgres://openmantle_app:openmantle_app@postgres:5432/openmantle
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-local-development-secret-change-me-now}
+      JWT_ISSUER: ${JWT_ISSUER:-openmantle}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      PORT: 3000
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["node", "dist/src/worker.js"]
+    environment:
+      <<: *app-environment
+      PORT: 3000
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "dist/src/worker-health.js"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "3000:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
