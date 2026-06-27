@@ -25,6 +25,10 @@ All tenant tables carry `organization_id`. Each request opens a transaction and 
 
 Global user lookup and API-key bootstrap use two narrow `SECURITY DEFINER` functions. They return only the fields required to establish identity. Once identity is established, ordinary queries run through RLS.
 
+The unauthenticated Shopify welcome-link route uses a similarly narrow lookup keyed by the OpenMantle app ID and exact `.myshopify.com` domain. It never trusts `plan_handle` by itself: it confirms the current subscription through the Partner API first.
+
 ## Authentication
 
 Dashboard sessions are 12-hour HS256 JWTs with user, organization, and role claims. Passwords use Argon2id. Public SDK keys use `om_<prefix>.<secret>` format; only a SHA-256 digest of the random secret is stored, and the full key is returned only at creation.
+
+Partner access tokens are encrypted with AES-256-GCM. All Partner calls pass through a Redis sliding-window limiter scoped to the stored credential, allowing at most three requests in any rolling second. This leaves headroom beneath Shopify's four-request-per-second Partner client limit. HTTP errors and GraphQL errors returned inside HTTP 200 responses share the same retry/error path.

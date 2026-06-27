@@ -7,13 +7,17 @@ import { createPool } from "./db/client.js";
 import { registerAppDecorators } from "./plugins.js";
 import { authRoutes } from "./routes/auth.js";
 import { apiKeyRoutes } from "./routes/api-keys.js";
+import { createQueues } from "./queues.js";
+import { partnerCredentialRoutes } from "./routes/partner-credentials.js";
+import { commerceRoutes } from "./routes/commerce.js";
 
 export async function buildServer(config: Config = loadConfig()) {
   const app = Fastify({ logger: config.NODE_ENV !== "test" });
   const pg = createPool(config.DATABASE_URL);
   const redis = new Redis(config.REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 1 });
+  const queues = createQueues(config);
 
-  registerAppDecorators(app, config, pg);
+  registerAppDecorators(app, config, pg, redis, queues);
   await app.register(cors, { origin: config.CORS_ORIGIN, credentials: true });
 
   app.setErrorHandler((error, _request, reply) => {
@@ -41,8 +45,15 @@ export async function buildServer(config: Config = loadConfig()) {
 
   await app.register(authRoutes);
   await app.register(apiKeyRoutes);
+  await app.register(partnerCredentialRoutes);
+  await app.register(commerceRoutes);
   app.addHook("onClose", async () => {
-    await Promise.all([pg.end(), redis.quit().catch(() => undefined)]);
+    await Promise.all([
+      pg.end(),
+      redis.quit().catch(() => undefined),
+      queues.partnerPoll.close(),
+      queues.historicalSync.close(),
+    ]);
   });
   return app;
 }

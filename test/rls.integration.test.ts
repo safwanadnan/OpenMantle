@@ -12,8 +12,10 @@ describeIfDatabase("Postgres tenant RLS", () => {
   beforeAll(async () => {
     const admin = new Client({ connectionString: adminDatabaseUrl });
     await admin.connect();
-    const migration = await readFile(new URL("../drizzle/0000_foundation.sql", import.meta.url), "utf8");
-    await admin.query(migration);
+    const foundation = await readFile(new URL("../drizzle/0000_foundation.sql", import.meta.url), "utf8");
+    const partnerIntegration = await readFile(new URL("../drizzle/0001_partner_integration.sql", import.meta.url), "utf8");
+    await admin.query(foundation);
+    await admin.query(partnerIntegration);
     await admin.end();
     client = new Client({ connectionString: databaseUrl });
     await client.connect();

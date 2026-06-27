@@ -2,6 +2,8 @@ import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool } from "pg";
 import type { Config } from "./config.js";
+import type { Redis } from "ioredis";
+import type { OpenMantleQueues } from "./queues.js";
 import { parseApiKey } from "./auth/crypto.js";
 import { verifySession } from "./auth/jwt.js";
 
@@ -9,6 +11,8 @@ declare module "fastify" {
   interface FastifyInstance {
     config: Config;
     pg: Pool;
+    redis: Redis;
+    queues: OpenMantleQueues;
     requireSession(request: FastifyRequest): Promise<void>;
     requireApiKey(request: FastifyRequest): Promise<void>;
   }
@@ -20,9 +24,17 @@ function safeEqual(left: string, right: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-export function registerAppDecorators(app: FastifyInstance, config: Config, pg: Pool): void {
+export function registerAppDecorators(
+  app: FastifyInstance,
+  config: Config,
+  pg: Pool,
+  redis: Redis,
+  queues: OpenMantleQueues,
+): void {
   app.decorate("config", config);
   app.decorate("pg", pg);
+  app.decorate("redis", redis);
+  app.decorate("queues", queues);
   app.decorateRequest("auth", null);
 
   app.decorate("requireSession", async function requireSession(request: FastifyRequest) {

@@ -50,7 +50,10 @@ export const partnerCredentials = pgTable("partner_credentials", {
   encryptedAccessToken: text("encrypted_access_token").notNull(),
   verifiedAt: timestamp("verified_at", { withTimezone: true }),
   ...timestamps,
-}, (table) => [index("partner_credentials_org_idx").on(table.organizationId)]);
+}, (table) => [
+  index("partner_credentials_org_idx").on(table.organizationId),
+  uniqueIndex("partner_credentials_org_partner_org_unique").on(table.organizationId, table.partnerOrganizationId),
+]);
 
 export const apps = pgTable("apps", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -123,6 +126,22 @@ export const historicalEventsCursors = pgTable("historical_events_cursors", {
   lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
   ...timestamps,
 });
+
+export const historicalEvents = pgTable("historical_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  shopifyEventId: text("shopify_event_id").notNull(),
+  eventType: text("event_type").notNull(),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+  shopifyShopId: text("shopify_shop_id"),
+  subjectType: text("subject_type"),
+  subjectId: text("subject_id"),
+  payload: jsonb("payload").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("historical_events_org_shopify_id_unique").on(table.organizationId, table.shopifyEventId),
+  index("historical_events_org_occurred_idx").on(table.organizationId, table.occurredAt),
+]);
 
 export const apiKeys = pgTable("api_keys", {
   id: uuid("id").primaryKey().defaultRandom(),

@@ -1,12 +1,13 @@
 # OpenMantle
 
-OpenMantle is an open-source billing infrastructure layer for Shopify App Pricing. This repository currently contains the Phase 1 foundation: a Fastify API, BullMQ worker, PostgreSQL/Drizzle schema with enforced tenant RLS, Redis, Caddy, dashboard authentication, and API-key management.
+OpenMantle is an open-source billing infrastructure layer for Shopify App Pricing. The repository contains the Phase 1 foundation plus the Partner API integration layer: encrypted credentials, distributed rate limiting, active-subscription polling, historical-event synchronization, and welcome-link confirmation.
 
 ## Run locally
 
 1. Copy `.env.example` to `.env` and replace `JWT_SECRET` with at least 32 random characters.
-2. Run `docker compose up --build`.
-3. Check `http://localhost:3000/health/ready`.
+2. Generate a credential encryption key with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` and set `CREDENTIAL_ENCRYPTION_KEY`.
+3. Run `docker compose up --build`.
+4. Check `http://localhost:3000/health/ready`.
 
 The migration service runs once before the API and worker start. PostgreSQL and Redis data are persisted in named Docker volumes.
 
@@ -28,6 +29,27 @@ curl -X POST http://localhost:3000/v1/api-keys \
 ```
 
 The `key` field is shown once. Store it securely.
+
+## Connect Shopify
+
+Create a Partner API client with **Manage apps** permission, then connect it. The token is verified against Shopify before being encrypted with AES-256-GCM.
+
+```bash
+curl -X POST http://localhost:3000/v1/partner-credentials \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer <dashboard-token>" \
+  -d '{"partnerOrganizationId":"123456","accessToken":"<partner-access-token>"}'
+```
+
+Register a Shopify app using its `gid://shopify/App/...` ID, then register installs using each shop's `gid://shopify/Shop/...` ID and `.myshopify.com` domain. Creating a shop schedules a staggered subscription poll immediately and every five minutes. Historical events sync every fifteen minutes per credential.
+
+Configure the Shopify App Pricing welcome link to:
+
+```text
+https://your-openmantle-host/v1/shopify/app-pricing/return/<openmantle-app-id>
+```
+
+Shopify appends `plan_handle` and `shop`. OpenMantle immediately queries `activeSubscription` before confirming the plan and writing a snapshot.
 
 ## Development
 
@@ -54,4 +76,4 @@ See [docs/architecture.md](docs/architecture.md) for the domain model and tenant
 
 ## Current scope
 
-Phase 1 is implemented. Partner credentials, Partner API polling, App Events forwarding, subscription redirects, and usage ingestion belong to the next phases and are not represented as working integrations yet.
+Phases 1 and 2 are implemented. Phase 3—public usage ingestion and App Events forwarding—is next. The Partner operations are pinned to `2026-07`; their query documents live in `src/partner/queries.ts` and follow the repository-local Shopify reference in `.agents/partner/2026-07`.

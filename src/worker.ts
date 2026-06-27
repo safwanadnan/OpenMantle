@@ -1,30 +1,56 @@
-import { Worker } from "bullmq";
+import { Worker, type Job } from "bullmq";
+import { Redis } from "ioredis";
 import { loadConfig } from "./config.js";
+import { createPool } from "./db/client.js";
+import {
+  HISTORICAL_SYNC_QUEUE,
+  PARTNER_POLL_QUEUE,
+  redisConnection,
+  type HistoricalSyncJob,
+  type SubscriptionPollJob,
+} from "./queues.js";
+import { pollActiveSubscription, syncHistoricalEvents } from "./partner/service.js";
 
 const config = loadConfig();
-const redisUrl = new URL(config.REDIS_URL);
-const connection = {
-  host: redisUrl.hostname,
-  port: Number(redisUrl.port || 6379),
-  username: redisUrl.username || undefined,
-  password: redisUrl.password || undefined,
-  tls: redisUrl.protocol === "rediss:" ? {} : undefined,
-};
-const worker = new Worker(
-  "openmantle-system",
-  async (job) => {
-    if (job.name === "heartbeat") return { processedAt: new Date().toISOString() };
-    throw new Error(`Unknown system job: ${job.name}`);
+const pool = createPool(config.DATABASE_URL);
+const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
+const connection = redisConnection(config.REDIS_URL);
+
+const pollWorker = new Worker<SubscriptionPollJob>(
+  PARTNER_POLL_QUEUE,
+  async (job: Job<SubscriptionPollJob>) => {
+    const subscription = await pollActiveSubscription(pool, redis, config, job.data);
+    return { status: subscription ? "active" : "none", observedAt: new Date().toISOString() };
   },
-  { connection },
+  { connection, concurrency: 20 },
 );
 
-worker.on("completed", (job) => console.log(JSON.stringify({ event: "job.completed", jobId: job.id })));
-worker.on("failed", (job, error) => console.error(JSON.stringify({ event: "job.failed", jobId: job?.id, error: error.message })));
+const historicalWorker = new Worker<HistoricalSyncJob>(
+  HISTORICAL_SYNC_QUEUE,
+  async (job: Job<HistoricalSyncJob>) => {
+    const inserted = await syncHistoricalEvents(pool, redis, config, job.data);
+    return { inserted, syncedAt: new Date().toISOString() };
+  },
+  { connection, concurrency: 5 },
+);
 
-async function shutdown() {
-  await worker.close();
+for (const worker of [pollWorker, historicalWorker]) {
+  worker.on("completed", (job) => console.log(JSON.stringify({ event: "job.completed", queue: worker.name, jobId: job.id })));
+  worker.on("failed", (job, error) => console.error(JSON.stringify({
+    event: "job.failed",
+    queue: worker.name,
+    jobId: job?.id,
+    attempt: job?.attemptsMade,
+    error: error.message,
+  })));
+}
+
+async function shutdown(signal: string) {
+  console.log(JSON.stringify({ event: "worker.shutdown", signal }));
+  await Promise.all([pollWorker.close(), historicalWorker.close()]);
+  await Promise.all([pool.end(), redis.quit()]);
   process.exit(0);
 }
-process.on("SIGTERM", () => void shutdown());
-process.on("SIGINT", () => void shutdown());
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
