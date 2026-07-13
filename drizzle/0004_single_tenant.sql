@@ -1,5 +1,5 @@
 CREATE OR REPLACE FUNCTION bootstrap_single_tenant(org_name text, admin_email text, admin_password_hash text)
-RETURNS TABLE(user_id uuid, organization_id uuid, role text)
+RETURNS TABLE(out_user_id uuid, out_organization_id uuid, out_role text)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   org_count integer;

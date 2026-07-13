@@ -1,9 +1,12 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 
-const migrationsDirectory = fileURLToPath(new URL("../../../drizzle", import.meta.url));
+try {
+  process.loadEnvFile();
+} catch {}
+
+const migrationsDirectory = join(process.cwd(), "drizzle");
 const connectionString = process.env.DATABASE_URL;
 
 if (!connectionString) throw new Error("DATABASE_URL is required");

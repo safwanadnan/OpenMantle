@@ -191,7 +191,7 @@ async function renderApps() {
     </s-section>
     <s-section heading="Apps">
       <s-stack direction="block" gap="base">
-        ${state.credentials.length ? `<s-grid gridTemplateColumns="1fr 2fr 2fr auto" gap="base" alignItems="end"><s-select id="app-credential" label="Credential">${credentialOptions}</s-select><s-text-field id="app-name" label="App name"></s-text-field><s-text-field id="shopify-app-id" label="Shopify app GID" placeholder="gid://shopify/App/123"></s-text-field><s-button data-action="create-app" variant="primary">Add app</s-button></s-grid>` : ""}
+        ${state.credentials.length ? `<s-grid gridTemplateColumns="1fr 2fr 2fr auto" gap="base" alignItems="end"><s-select id="app-credential" label="Credential">${credentialOptions}</s-select><s-text-field id="app-name" label="App name"></s-text-field><s-text-field id="shopify-app-id" label="Shopify app ID" placeholder="e.g., 123456789"></s-text-field><s-button data-action="create-app" variant="primary">Add app</s-button></s-grid>` : ""}
         ${state.apps.length ? `<s-select id="selected-app" label="Manage app">${appOptions}</s-select>` : '<s-banner heading="No apps registered" tone="info">Add your first Shopify app after connecting a Partner credential.</s-banner>'}
       </s-stack>
     </s-section>
@@ -204,7 +204,7 @@ async function renderApps() {
         </s-stack>
       </s-section>
       <s-section heading="Installed shops">
-        <s-grid gridTemplateColumns="2fr 2fr auto" gap="base" alignItems="end"><s-text-field id="shop-domain" label="Shop domain" placeholder="example.myshopify.com"></s-text-field><s-text-field id="shopify-shop-id" label="Shopify shop GID" placeholder="gid://shopify/Shop/123"></s-text-field><s-button data-action="create-shop" variant="primary">Add shop</s-button></s-grid>
+        <s-grid gridTemplateColumns="2fr 2fr auto" gap="base" alignItems="end"><s-text-field id="shop-domain" label="Shop domain" placeholder="example.myshopify.com"></s-text-field><s-text-field id="shopify-shop-id" label="Shopify shop ID" placeholder="e.g., 123456789"></s-text-field><s-button data-action="create-shop" variant="primary">Add shop</s-button></s-grid>
         ${shops.length ? `<s-table><s-table-header-row><s-table-header listSlot="primary">Shop</s-table-header><s-table-header>Plan</s-table-header><s-table-header>Status</s-table-header><s-table-header>Observed</s-table-header></s-table-header-row><s-table-body>${shops.map((shop) => `<s-table-row><s-table-cell>${escapeHtml(shop.domain)}</s-table-cell><s-table-cell>${escapeHtml(shop.subscription?.planHandle || "—")}</s-table-cell><s-table-cell>${badge(shop.subscription?.status || "pending")}</s-table-cell><s-table-cell>${formatDate(shop.subscription?.observedAt)}</s-table-cell></s-table-row>`).join("")}</s-table-body></s-table>` : '<s-text tone="neutral" color="subdued">No shops registered for this app.</s-text>'}
       </s-section>` : ""}`,
     "Apps & shops");

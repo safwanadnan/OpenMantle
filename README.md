@@ -41,7 +41,7 @@ curl -X POST http://localhost:3000/v1/partner-credentials \
   -d '{"partnerOrganizationId":"123456","accessToken":"<partner-access-token>"}'
 ```
 
-Register a Shopify app using its `gid://shopify/App/...` ID, then register installs using each shop's `gid://shopify/Shop/...` ID and `.myshopify.com` domain. Creating a shop schedules a staggered subscription poll immediately and every five minutes. Historical events sync every fifteen minutes per credential.
+Register a Shopify app using its numeric ID, then register installs using each shop's numeric ID and `.myshopify.com` domain. Creating a shop schedules a staggered subscription poll immediately and every five minutes. Historical events sync every fifteen minutes per credential.
 
 Configure the Shopify App Pricing welcome link to:
 

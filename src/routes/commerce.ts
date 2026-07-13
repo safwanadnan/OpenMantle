@@ -13,11 +13,19 @@ const redirectQuery = z.object({
 });
 const createAppSchema = z.object({
   partnerCredentialId: z.string().uuid(),
-  shopifyAppId: z.string().regex(/^gid:\/\/shopify\/App\/\d+$/),
+  shopifyAppId: z.string().trim().transform((val) => {
+    const match = val.match(/\d+$/);
+    if (!match) return val;
+    return `gid://shopify/App/${match[0]}`;
+  }).pipe(z.string().regex(/^gid:\/\/shopify\/App\/\d+$/)),
   name: z.string().trim().min(1).max(150),
 });
 const createShopSchema = z.object({
-  shopifyShopId: z.string().regex(/^gid:\/\/shopify\/Shop\/\d+$/),
+  shopifyShopId: z.string().trim().transform((val) => {
+    const match = val.match(/\d+$/);
+    if (!match) return val;
+    return `gid://shopify/Shop/${match[0]}`;
+  }).pipe(z.string().regex(/^gid:\/\/shopify\/Shop\/\d+$/)),
   domain: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/),
 });
 const historicalQuery = z.object({
@@ -30,17 +38,30 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     const result = await tenantQuery(app, request.auth!.organizationId,
       `SELECT id, partner_credential_id AS "partnerCredentialId", shopify_app_id AS "shopifyAppId", name, created_at AS "createdAt"
        FROM apps ORDER BY created_at DESC`);
-    return { data: result.rows };
+    const data = result.rows.map((row) => ({
+      ...row,
+      shopifyAppId: typeof row.shopifyAppId === "string" ? row.shopifyAppId.replace(/^gid:\/\/shopify\/App\//, "") : row.shopifyAppId,
+    }));
+    return { data };
   });
 
   app.post("/v1/apps", { preHandler: app.requireSession }, async (request, reply) => {
     const body = createAppSchema.parse(request.body);
-    const result = await tenantQuery(app, request.auth!.organizationId,
+    const result = await tenantQuery<{
+      id: string;
+      partnerCredentialId: string | null;
+      shopifyAppId: string;
+      name: string;
+    }>(app, request.auth!.organizationId,
       `INSERT INTO apps (organization_id, partner_credential_id, shopify_app_id, name)
        VALUES ($1, $2, $3, $4)
        RETURNING id, partner_credential_id AS "partnerCredentialId", shopify_app_id AS "shopifyAppId", name`,
       [request.auth!.organizationId, body.partnerCredentialId, body.shopifyAppId, body.name]);
-    return reply.code(201).send(result.rows[0]);
+    const row = result.rows[0];
+    if (row && typeof row.shopifyAppId === "string") {
+      row.shopifyAppId = row.shopifyAppId.replace(/^gid:\/\/shopify\/App\//, "");
+    }
+    return reply.code(201).send(row);
   });
 
   app.get("/v1/apps/:appId/shops", { preHandler: app.requireApiAccess }, async (request) => {
@@ -48,7 +69,11 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     const result = await tenantQuery(app, request.auth!.organizationId,
       `SELECT id, app_id AS "appId", shopify_shop_id AS "shopifyShopId", domain, created_at AS "createdAt"
        FROM shops WHERE app_id = $1 ORDER BY created_at DESC`, [appId]);
-    return { data: result.rows };
+    const data = result.rows.map((row) => ({
+      ...row,
+      shopifyShopId: typeof row.shopifyShopId === "string" ? row.shopifyShopId.replace(/^gid:\/\/shopify\/Shop\//, "") : row.shopifyShopId,
+    }));
+    return { data };
   });
 
   app.post("/v1/apps/:appId/shops", { preHandler: app.requireSession }, async (request, reply) => {
@@ -78,6 +103,9 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       appId,
       shopId: shop.id,
     });
+    if (shop && typeof shop.shopifyShopId === "string") {
+      shop.shopifyShopId = shop.shopifyShopId.replace(/^gid:\/\/shopify\/Shop\//, "");
+    }
     return reply.code(201).send(shop);
   });
 
@@ -99,7 +127,12 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
               subject_type AS "subjectType", subject_id AS "subjectId", payload
        FROM historical_events WHERE ($1::timestamptz IS NULL OR occurred_at < $1)
        ORDER BY occurred_at DESC LIMIT $2`, [query.before ?? null, query.limit]);
-    return { data: result.rows };
+    const data = result.rows.map((row) => ({
+      ...row,
+      shopifyShopId: typeof row.shopifyShopId === "string" ? row.shopifyShopId.replace(/^gid:\/\/shopify\/Shop\//, "") : row.shopifyShopId,
+      subjectId: typeof row.subjectId === "string" ? row.subjectId.replace(/^gid:\/\/shopify\/[A-Za-z]+\//, "") : row.subjectId,
+    }));
+    return { data };
   });
 
   app.get("/v1/shopify/app-pricing/return/:appId", async (request, reply) => {
