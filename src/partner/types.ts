@@ -1,3 +1,26 @@
+export interface FlatRatePriceDetails {
+  __typename: "FlatRatePrice";
+  active: boolean;
+  currency: string;
+  amount: string;
+}
+
+export interface TieredPriceDetails {
+  __typename: "TieredPrice";
+  active: boolean;
+  currency: string;
+  tiersMode: string;
+  tiers: Array<{ amount: string; amountPerUnit: string; upTo: number | null }>;
+}
+
+export interface SubscriptionDiscount {
+  amount: string | null;
+  percentage: number | null;
+  discountEndsAt: string | null;
+  originalDiscountCycles: number | null;
+  remainingDiscountCycles: number | null;
+}
+
 export interface ActiveSubscription {
   app: { id: string; apiKey: string; name: string };
   shop: { id: string; myshopifyDomain: string; name: string };
@@ -9,7 +32,8 @@ export interface ActiveSubscription {
   items: Array<{
     handle: string | null;
     description: string | null;
-    price: { __typename: string; active: boolean; currency: string } & Record<string, unknown>;
+    price: FlatRatePriceDetails | TieredPriceDetails;
+    discount: SubscriptionDiscount | null;
     usage: { quantity: number; cost: { amount: string; currencyCode: string } } | null;
   }>;
   pendingUpdate: Record<string, unknown> | null;
@@ -30,3 +54,15 @@ export interface HistoricalEventsPage {
     pageInfo: { endCursor: string | null; hasNextPage: boolean };
   };
 }
+
+export interface CancelSubscriptionResult {
+  appSubscriptionCancel: {
+    appSubscription: {
+      billingPeriod: string;
+      cancelAtEndOfCycle: boolean;
+      currentBillingCycle: { startTime: string; endTime: string } | null;
+    } | null;
+    userErrors: Array<{ field: string | null; message: string }>;
+  };
+}
+

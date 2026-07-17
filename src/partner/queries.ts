@@ -67,3 +67,29 @@ export const HISTORICAL_EVENTS_QUERY = `#graphql
     }
   }
 `;
+
+export const APP_SUBSCRIPTION_CANCEL_MUTATION = `#graphql
+  mutation AppSubscriptionCancel(
+    $appId: ID!
+    $shopId: ID!
+    $deferCancellation: Boolean!
+    $prorate: Boolean!
+    $skipFinalUsageCharge: Boolean!
+  ) {
+    appSubscriptionCancel(
+      appId: $appId
+      shopId: $shopId
+      deferCancellation: $deferCancellation
+      prorate: $prorate
+      skipFinalUsageCharge: $skipFinalUsageCharge
+    ) {
+      appSubscription {
+        billingPeriod
+        cancelAtEndOfCycle
+        currentBillingCycle { startTime endTime }
+      }
+      userErrors { field message }
+    }
+  }
+`;
+

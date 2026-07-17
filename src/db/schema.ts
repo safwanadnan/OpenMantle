@@ -194,3 +194,69 @@ export const webhookDeliveries = pgTable("webhook_deliveries", {
   lastError: text("last_error"),
   ...timestamps,
 }, (table) => [index("webhook_deliveries_org_pending_idx").on(table.organizationId, table.status, table.nextAttemptAt)]);
+
+// ---------------------------------------------------------------------------
+// Shopify App Managed Pricing
+// ---------------------------------------------------------------------------
+
+/** Plan catalog — inferred from observed subscriptions or manually configured. */
+export const plans = pgTable("plans", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  appId: uuid("app_id").notNull().references(() => apps.id, { onDelete: "cascade" }),
+  handle: text("handle").notNull(),
+  name: text("name").notNull(),
+  priceType: text("price_type").notNull().default("flat_rate"), // 'flat_rate' | 'tiered'
+  amount: text("amount"), // stored as text to preserve decimal precision
+  currencyCode: text("currency_code").notNull().default("USD"),
+  billingPeriod: text("billing_period"), // 'EVERY_30_DAYS' | 'ANNUAL' | null
+  trialDays: integer("trial_days"),
+  isInferred: boolean("is_inferred").notNull().default(true),
+  inferredAt: timestamp("inferred_at", { withTimezone: true }),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("plans_app_handle_unique").on(table.appId, table.handle),
+  index("plans_org_app_idx").on(table.organizationId, table.appId),
+]);
+
+/** Live subscription mirror — one row per shop, upserted on every poll. */
+export const subscriptions = pgTable("subscriptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+  planHandle: text("plan_handle"),
+  billingPeriod: text("billing_period"),
+  cancelAtEndOfCycle: boolean("cancel_at_end_of_cycle").notNull().default(false),
+  trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
+  cycleStartAt: timestamp("cycle_start_at", { withTimezone: true }),
+  cycleEndAt: timestamp("cycle_end_at", { withTimezone: true }),
+  legacySubscriptionId: text("legacy_subscription_id"),
+  monthlyAmount: text("monthly_amount"), // precomputed for analytics
+  rawPayload: jsonb("raw_payload").notNull().default({}),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull().defaultNow(),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("subscriptions_shop_unique").on(table.shopId),
+  index("subscriptions_org_idx").on(table.organizationId),
+  index("subscriptions_org_plan_idx").on(table.organizationId, table.planHandle),
+  index("subscriptions_org_cycle_end_idx").on(table.organizationId, table.cycleEndAt),
+]);
+
+/** Append-only subscription lifecycle events — powers flow analytics. */
+export const subscriptionEvents = pgTable("subscription_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+  eventType: text("event_type").notNull(), // 'activated' | 'plan_changed' | 'cancelled' | 'trial_started' | 'trial_converted' | 'reactivated'
+  planHandle: text("plan_handle"),
+  fromPlanHandle: text("from_plan_handle"),
+  monthlyAmount: text("monthly_amount"),
+  fromMonthlyAmount: text("from_monthly_amount"),
+  netChange: text("net_change"), // signed MRR delta
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+  rawPayload: jsonb("raw_payload"),
+}, (table) => [
+  index("sub_events_org_occurred_idx").on(table.organizationId, table.occurredAt),
+  index("sub_events_shop_idx").on(table.shopId, table.occurredAt),
+  index("sub_events_org_type_idx").on(table.organizationId, table.eventType, table.occurredAt),
+]);

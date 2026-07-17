@@ -17,6 +17,8 @@ import { webhookRoutes } from "./routes/webhooks.js";
 import { hashPassword } from "./auth/crypto.js";
 import { randomBytes } from "node:crypto";
 import { dashboardRoutes } from "./routes/dashboard.js";
+import { subscriptionRoutes } from "./routes/subscriptions.js";
+import { analyticsRoutes } from "./routes/analytics.js";
 
 export async function buildServer(config: Config = loadConfig()) {
   const app = Fastify({ logger: config.NODE_ENV !== "test" });
@@ -78,6 +80,8 @@ export async function buildServer(config: Config = loadConfig()) {
   await app.register(usageRoutes);
   await app.register(webhookRoutes);
   await app.register(dashboardRoutes);
+  await app.register(subscriptionRoutes);
+  await app.register(analyticsRoutes);
   app.addHook("onClose", async () => {
     await Promise.all([
       pg.end(),

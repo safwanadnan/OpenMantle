@@ -3,10 +3,11 @@ import type { Pool, PoolClient } from "pg";
 import type { Config } from "../config.js";
 import { decryptCredential } from "../crypto/credentials.js";
 import { PartnerClient } from "./client.js";
-import { ACTIVE_SUBSCRIPTION_QUERY, HISTORICAL_EVENTS_QUERY } from "./queries.js";
+import { ACTIVE_SUBSCRIPTION_QUERY, APP_SUBSCRIPTION_CANCEL_MUTATION, HISTORICAL_EVENTS_QUERY } from "./queries.js";
 import { PartnerRateLimiter } from "./rate-limiter.js";
-import type { ActiveSubscription, HistoricalEventsPage } from "./types.js";
+import type { ActiveSubscription, CancelSubscriptionResult, HistoricalEventsPage } from "./types.js";
 import { scheduleWebhookDispatch, type OpenMantleQueues } from "../queues.js";
+import { computeMonthlyAmount } from "../analytics/normalize.js";
 
 interface CredentialRow {
   partner_organization_id: string;
@@ -55,6 +56,21 @@ export async function pollActiveSubscription(
   });
   const deliveries = await writeSnapshot(pool, input.organizationId, input.shopId, data.activeSubscription);
   if (deliveries > 0 && queues) await scheduleWebhookDispatch(queues, config, input.organizationId);
+
+  // Self-healing plan inference + subscription mirror (non-critical — don't throw on failure)
+  if (data.activeSubscription) {
+    await inferAndUpsertPlan(pool, input.organizationId, input.appId, data.activeSubscription).catch((error: unknown) => {
+      console.error(JSON.stringify({ event: "plan.inference.failed", shopId: input.shopId, error: (error as Error).message }));
+    });
+    await upsertSubscriptionMirror(pool, input.organizationId, input.shopId, data.activeSubscription).catch((error: unknown) => {
+      console.error(JSON.stringify({ event: "subscription.mirror.failed", shopId: input.shopId, error: (error as Error).message }));
+    });
+  } else {
+    await markSubscriptionGone(pool, input.organizationId, input.shopId).catch((error: unknown) => {
+      console.error(JSON.stringify({ event: "subscription.mirror.gone.failed", shopId: input.shopId, error: (error as Error).message }));
+    });
+  }
+
   return data.activeSubscription;
 }
 
@@ -140,6 +156,301 @@ export async function syncHistoricalEvents(
     if (page.events.edges.length === 0) break;
   }
   return inserted;
+}
+
+/**
+ * Cancel a managed pricing subscription via the Partner API.
+ * Requires the Partner API credential to have "View financials" permission.
+ */
+export async function cancelSubscription(
+  pool: Pool,
+  redis: Redis,
+  config: Config,
+  input: {
+    organizationId: string;
+    credentialId: string;
+    shopifyAppId: string;
+    shopifyShopId: string;
+    deferCancellation?: boolean;
+    prorate?: boolean;
+    skipFinalUsageCharge?: boolean;
+  },
+): Promise<CancelSubscriptionResult["appSubscriptionCancel"]> {
+  const client = await tenantClient(pool, input.organizationId);
+  let credential: CredentialRow;
+  try {
+    const result = await client.query<CredentialRow>(
+      "SELECT partner_organization_id, encrypted_access_token FROM partner_credentials WHERE id = $1",
+      [input.credentialId],
+    );
+    if (!result.rows[0]) throw new Error("Partner credential not found");
+    credential = result.rows[0];
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+  const partner = partnerClientForToken(
+    config, redis, input.credentialId,
+    credential.partner_organization_id,
+    decryptCredential(credential.encrypted_access_token, config.CREDENTIAL_ENCRYPTION_KEY),
+  );
+  const data = await partner.query<CancelSubscriptionResult>(APP_SUBSCRIPTION_CANCEL_MUTATION, {
+    appId: input.shopifyAppId,
+    shopId: input.shopifyShopId,
+    deferCancellation: input.deferCancellation ?? false,
+    prorate: input.prorate ?? false,
+    skipFinalUsageCharge: input.skipFinalUsageCharge ?? false,
+  });
+  if (data.appSubscriptionCancel.userErrors.length > 0) {
+    throw new Error(data.appSubscriptionCancel.userErrors.map((e) => e.message).join("; "));
+  }
+  return data.appSubscriptionCancel;
+}
+
+// ---------------------------------------------------------------------------
+// Self-healing plan inference
+// ---------------------------------------------------------------------------
+
+/**
+ * For each active subscription item, ensure a plan row exists locally.
+ * If a plan with this handle is new, insert it (is_inferred = true).
+ * If it already exists, only update the name to avoid stomping manual configs.
+ */
+async function inferAndUpsertPlan(
+  pool: Pool,
+  organizationId: string,
+  appId: string,
+  subscription: ActiveSubscription,
+): Promise<void> {
+  const client = await tenantClient(pool, organizationId);
+  try {
+    for (const item of subscription.items) {
+      if (!item.handle || !item.price.active) continue;
+
+      const isFlatRate = item.price.__typename === "FlatRatePrice";
+      const priceType = isFlatRate ? "flat_rate" : "tiered";
+      const amount = item.price.__typename === "FlatRatePrice"
+        ? String(item.price.amount ?? "0")
+        : null; // tiered plans don't have a single amount
+      const currency = item.price.currency ?? "USD";
+      const billingPeriod = subscription.billingPeriod ?? null;
+
+      await client.query(
+        `INSERT INTO plans
+           (organization_id, app_id, handle, name, price_type, amount, currency_code,
+            billing_period, trial_days, is_inferred, inferred_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, now())
+         ON CONFLICT (app_id, handle) DO UPDATE
+           SET name = EXCLUDED.name,
+               updated_at = now()`,
+        [
+          organizationId, appId,
+          item.handle,
+          item.description ?? item.handle,
+          priceType, amount, currency, billingPeriod,
+          null, // trial_days not available from subscription; set manually if needed
+        ],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Subscription mirror upsert
+// ---------------------------------------------------------------------------
+
+async function upsertSubscriptionMirror(
+  pool: Pool,
+  organizationId: string,
+  shopId: string,
+  subscription: ActiveSubscription,
+): Promise<void> {
+  const client = await tenantClient(pool, organizationId);
+  try {
+    // Determine the primary plan handle (prefer flat-rate active item)
+    const planHandle = subscription.items.find((i) => i.price.__typename === "FlatRatePrice" && i.price.active)?.handle
+      ?? subscription.items.find((i) => i.handle)?.handle
+      ?? null;
+
+    // Compute precomputed monthly amount from the active flat-rate item
+    const flatItem = subscription.items.find((i) => i.price.__typename === "FlatRatePrice" && i.price.active);
+    const rawAmount = flatItem?.price.__typename === "FlatRatePrice" ? String(flatItem.price.amount ?? "0") : "0";
+    const rawDiscount = flatItem?.discount ?? null;
+    const monthlyAmount = computeMonthlyAmount(
+      rawAmount,
+      subscription.billingPeriod ?? "EVERY_30_DAYS",
+      rawDiscount ? {
+        percentage: rawDiscount.percentage ?? null,
+        fixedAmount: rawDiscount.amount ? String(rawDiscount.amount) : null,
+        discountEndsAt: rawDiscount.discountEndsAt ?? null,
+        originalDiscountCycles: rawDiscount.originalDiscountCycles ?? null,
+      } : null,
+    );
+
+    const previous = await client.query<{
+      plan_handle: string | null;
+      monthly_amount: string | null;
+      trial_ends_at: Date | null;
+    }>(
+      `SELECT plan_handle, monthly_amount, trial_ends_at
+       FROM subscriptions WHERE shop_id = $1`,
+      [shopId],
+    );
+    const prior = previous.rows[0] ?? null;
+
+    await client.query(
+      `INSERT INTO subscriptions
+         (organization_id, shop_id, plan_handle, billing_period, cancel_at_end_of_cycle,
+          trial_ends_at, cycle_start_at, cycle_end_at, legacy_subscription_id,
+          monthly_amount, raw_payload, observed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+       ON CONFLICT (shop_id) DO UPDATE SET
+         plan_handle = EXCLUDED.plan_handle,
+         billing_period = EXCLUDED.billing_period,
+         cancel_at_end_of_cycle = EXCLUDED.cancel_at_end_of_cycle,
+         trial_ends_at = EXCLUDED.trial_ends_at,
+         cycle_start_at = EXCLUDED.cycle_start_at,
+         cycle_end_at = EXCLUDED.cycle_end_at,
+         legacy_subscription_id = EXCLUDED.legacy_subscription_id,
+         monthly_amount = EXCLUDED.monthly_amount,
+         raw_payload = EXCLUDED.raw_payload,
+         observed_at = now(),
+         updated_at = now()`,
+      [
+        organizationId, shopId,
+        planHandle,
+        subscription.billingPeriod ?? null,
+        subscription.cancelAtEndOfCycle,
+        subscription.trialEndsAt ?? null,
+        subscription.currentBillingCycle?.startTime ?? null,
+        subscription.currentBillingCycle?.endTime ?? null,
+        subscription.legacySubscriptionId ?? null,
+        String(monthlyAmount),
+        subscription,
+      ],
+    );
+
+    // Emit lifecycle event for analytics
+    await emitSubscriptionEvent(client, organizationId, shopId, {
+      prior,
+      current: { planHandle, monthlyAmount: String(monthlyAmount) },
+      subscription,
+    });
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function markSubscriptionGone(
+  pool: Pool,
+  organizationId: string,
+  shopId: string,
+): Promise<void> {
+  const client = await tenantClient(pool, organizationId);
+  try {
+    const existing = await client.query<{ plan_handle: string | null; monthly_amount: string | null }>(
+      "SELECT plan_handle, monthly_amount FROM subscriptions WHERE shop_id = $1",
+      [shopId],
+    );
+    if (!existing.rows[0]) {
+      await client.query("COMMIT");
+      return; // Nothing to clean up
+    }
+    const prior = existing.rows[0];
+    await client.query(
+      "DELETE FROM subscriptions WHERE shop_id = $1",
+      [shopId],
+    );
+    // Emit cancellation event
+    await client.query(
+      `INSERT INTO subscription_events
+         (organization_id, shop_id, event_type, plan_handle, from_plan_handle,
+          monthly_amount, from_monthly_amount, net_change)
+       VALUES ($1, $2, 'cancelled', null, $3, '0', $4, $5)`,
+      [
+        organizationId, shopId,
+        prior.plan_handle,
+        prior.monthly_amount,
+        prior.monthly_amount ? String(-Number(prior.monthly_amount)) : "0",
+      ],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function determineEventType(
+  prior: { plan_handle: string | null; monthly_amount: string | null; trial_ends_at: Date | null } | null,
+  current: { planHandle: string | null; monthlyAmount: string },
+  subscription: ActiveSubscription,
+): string | null {
+  const isTrialActive = subscription.trialEndsAt !== null && new Date(subscription.trialEndsAt) > new Date();
+
+  if (!prior) {
+    // First time we see this subscription
+    return isTrialActive ? "trial_started" : "activated";
+  }
+  const hadTrial = prior.trial_ends_at !== null;
+  const trialJustEnded = hadTrial && !isTrialActive;
+  if (trialJustEnded) return "trial_converted";
+
+  if (prior.plan_handle !== current.planHandle) return "plan_changed";
+
+  // No meaningful change — skip event
+  return null;
+}
+
+async function emitSubscriptionEvent(
+  client: PoolClient,
+  organizationId: string,
+  shopId: string,
+  args: {
+    prior: { plan_handle: string | null; monthly_amount: string | null; trial_ends_at: Date | null } | null;
+    current: { planHandle: string | null; monthlyAmount: string };
+    subscription: ActiveSubscription;
+  },
+): Promise<void> {
+  const eventType = determineEventType(args.prior, args.current, args.subscription);
+  if (!eventType) return;
+
+  const fromMonthlyAmount = args.prior?.monthly_amount ?? null;
+  const toMonthlyAmount = args.current.monthlyAmount;
+  const netChange = fromMonthlyAmount !== null
+    ? String(Number(toMonthlyAmount) - Number(fromMonthlyAmount))
+    : toMonthlyAmount;
+
+  await client.query(
+    `INSERT INTO subscription_events
+       (organization_id, shop_id, event_type, plan_handle, from_plan_handle,
+        monthly_amount, from_monthly_amount, net_change)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      organizationId, shopId, eventType,
+      args.current.planHandle,
+      args.prior?.plan_handle ?? null,
+      toMonthlyAmount,
+      fromMonthlyAmount,
+      netChange,
+    ],
+  );
 }
 
 async function loadPollRow(
